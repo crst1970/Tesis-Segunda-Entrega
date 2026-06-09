@@ -1,0 +1,18 @@
+# Resultados y artefactos pesados del pipeline
+resultados/
+
+# Caches de Python/Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Temporales de Office/OneDrive
+~$*
+
+# Datos neuroimagen y matrices derivadas pesadas
+*.npy
+*.nii
+*.nii.gz
+*.pkl
+*.joblib
+*.part
