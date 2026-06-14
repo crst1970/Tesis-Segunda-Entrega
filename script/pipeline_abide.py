@@ -37,8 +37,7 @@ Metodos implementados pero excluidos del analisis principal actual:
 
 Notas:
 - Este proyecto no usa ROIs precomputadas de ABIDE PCP.
-- Partial, Granger y PCMCI quedan disponibles para pruebas exploratorias, pero no forman
-  parte del analisis principal actual.
+- Partial, Granger y PCMCI quedan disponibles.
 - Granger, PCMCI y LiNGAM escalan mal con muchas ROIs. Use --max-rois para pruebas.
 - PCMCI requiere tigramite instalado.
 - LiNGAM requiere lingam instalado.
@@ -125,7 +124,7 @@ CLASSIFIERS = {
 }
 
 N_PER_GROUP = 100
-CONNECTIVITY_ALGORITHM_VERSION = 6
+CONNECTIVITY_ALGORITHM_VERSION = 8
 
 
 def enforce_supported_atlas(atlas_name: str) -> str:
@@ -720,6 +719,7 @@ def compute_matrix(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
+    graphical_lasso_alpha: float = 0.2,
 ) -> np.ndarray:
     """Calcula una matriz de conectividad para un sujeto."""
     signals_z = limpiar_numericos(signals_z, nombre=f"entrada conectividad {method}")
@@ -728,7 +728,7 @@ def compute_matrix(
     if method == "partial":
         return limpiar_numericos(correlacion_parcial(signals_z), nombre="matriz partial")
     if method == "graphical_lasso":
-        matrix, _ = graphical_lasso(signals_z)
+        matrix, _ = graphical_lasso(signals_z, alpha=graphical_lasso_alpha)
         return limpiar_numericos(matrix, nombre="matriz graphical_lasso")
     if method == "granger":
         matrix, _ = granger(signals_z, maxlag=maxlag, lag_strategy=granger_lag_strategy)
@@ -930,9 +930,10 @@ def matrix_cache_signature(
     lingam_random_state: int,
     granger_lag_strategy: str,
     pcmci_value_mode: str,
+    graphical_lasso_alpha: Optional[float] = None,
 ) -> Dict[str, object]:
     """Firma para evitar reusar matrices de otro atlas, ROI set o parametro."""
-    return {
+    signature = {
         "connectivity_algorithm_version": CONNECTIVITY_ALGORITHM_VERSION,
         "file_id": subject.file_id,
         "atlas_name": subject.atlas_name,
@@ -948,6 +949,11 @@ def matrix_cache_signature(
         "granger_lag_strategy": granger_lag_strategy,
         "pcmci_value_mode": pcmci_value_mode,
     }
+    if method == "graphical_lasso":
+        signature["graphical_lasso_alpha"] = float(
+            0.2 if graphical_lasso_alpha is None else graphical_lasso_alpha
+        )
+    return signature
 
 
 def cache_meta_matches(meta_path: Path, signature: Dict[str, object]) -> bool:
@@ -968,6 +974,7 @@ def build_method_dataset(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
+    graphical_lasso_alpha: float = 0.2,
     cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Path]]:
     """Calcula/cachea matrices y devuelve X, y, matrices."""
@@ -998,17 +1005,24 @@ def build_method_dataset(
             lingam_random_state=lingam_random_state,
             granger_lag_strategy=granger_lag_strategy,
             pcmci_value_mode=pcmci_value_mode,
+            graphical_lasso_alpha=graphical_lasso_alpha,
         )
 
         matrix = None
         if cache and matrix_path.exists():
             cached_matrix = np.load(matrix_path)
-            if cached_matrix.shape == expected_shape and cache_meta_matches(meta_path, signature):
+            shape_ok = cached_matrix.shape == expected_shape
+            meta_ok = cache_meta_matches(meta_path, signature)
+            if shape_ok and meta_ok:
                 matrix = cached_matrix
             else:
+                reason = (
+                    f"shape {cached_matrix.shape} != {expected_shape}"
+                    if not shape_ok
+                    else "metadata distinta"
+                )
                 print(
-                    f"  Cache incompatible para {subject.file_id}: "
-                    f"{cached_matrix.shape} != {expected_shape} o metadata distinta; recalculando."
+                    f"  Cache incompatible para {subject.file_id}: {reason}; recalculando."
                 )
 
         if matrix is None:
@@ -1020,6 +1034,7 @@ def build_method_dataset(
                 lingam_random_state=lingam_random_state,
                 granger_lag_strategy=granger_lag_strategy,
                 pcmci_value_mode=pcmci_value_mode,
+                graphical_lasso_alpha=graphical_lasso_alpha,
             )
             if cache:
                 np.save(matrix_path, matrix)
@@ -1997,6 +2012,7 @@ def run_pipeline(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
+    graphical_lasso_alpha: float = 0.2,
     apply_bandpass: bool = True,
     cv_strategy: str = "group_site",
     cache: bool = True,
@@ -2073,6 +2089,7 @@ def run_pipeline(
                 lingam_random_state=lingam_random_state,
                 granger_lag_strategy=granger_lag_strategy,
                 pcmci_value_mode=pcmci_value_mode,
+                graphical_lasso_alpha=graphical_lasso_alpha,
                 cache=cache,
             )
             matrix_plot = plot_mean_matrix(matrices, method, output_dir)
@@ -2255,6 +2272,7 @@ def run_pipeline(
         "lingam_random_state": lingam_random_state,
         "granger_lag_strategy": granger_lag_strategy,
         "pcmci_value_mode": pcmci_value_mode,
+        "graphical_lasso_alpha": graphical_lasso_alpha,
         "apply_bandpass": apply_bandpass,
         "cv_strategy": cv_strategy,
         "stage_outputs": stage_paths,
@@ -2308,6 +2326,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--lingam-random-state", type=int, default=42)
     parser.add_argument("--granger-lag-strategy", default="min_q", choices=["min_q", "min_p", "maxlag", "mean_p"])
     parser.add_argument("--pcmci-value-mode", default="signed_logp", choices=["signed_logp", "effect"])
+    parser.add_argument("--graphical-lasso-alpha", type=float, default=0.2, help="Alpha fijo para Graphical Lasso.")
     parser.add_argument("--skip-bandpass", action="store_true", help="No aplicar bandpass local; usar si los NIfTI estan en filt_*.")
     parser.add_argument("--cv-strategy", default="group_site", choices=["group_site", "stratified"])
     parser.add_argument("--no-cache", action="store_true", help="Recalcular matrices aunque existan")
@@ -2345,6 +2364,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         lingam_random_state=args.lingam_random_state,
         granger_lag_strategy=args.granger_lag_strategy,
         pcmci_value_mode=args.pcmci_value_mode,
+        graphical_lasso_alpha=args.graphical_lasso_alpha,
         apply_bandpass=not args.skip_bandpass,
         cv_strategy=args.cv_strategy,
         cache=not args.no_cache,

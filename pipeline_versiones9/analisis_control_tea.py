@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
@@ -315,9 +316,39 @@ def _support_metrics(
     }
 
 
-def build_method_metadata(output_dir: Path) -> Path:
+def _read_graphical_lasso_alpha(source_dir: Path) -> float | None:
+    config_path = source_dir / "configuracion_pipeline.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            alpha = config.get("graphical_lasso_alpha")
+            if alpha is not None:
+                return float(alpha)
+        except Exception:
+            pass
+
+    matrix_root = source_dir / "matrices"
+    for meta_path in matrix_root.glob("graphical_lasso_*rois/*.meta.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            alpha = meta.get("graphical_lasso_alpha")
+            if alpha is not None:
+                return float(alpha)
+        except Exception:
+            continue
+    return None
+
+
+def build_method_metadata(output_dir: Path, source_dir: Path | None = None) -> Path:
     tables_dir = output_dir / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
+    alpha = _read_graphical_lasso_alpha(source_dir) if source_dir is not None else None
+    alpha_status = f"fixed_alpha={alpha:g}" if alpha is not None else "not_available_in_existing_cache"
+    alpha_note = (
+        f"Alpha fijo validado y usado en la cohorte: {alpha:g}."
+        if alpha is not None
+        else "No se recupera alpha por sujeto desde caches antiguos."
+    )
     rows = [
         {
             "method": "lasso",
@@ -326,15 +357,137 @@ def build_method_metadata(output_dir: Path) -> Path:
             "stored_matrix": "normalized_partial_correlation_from_precision",
             "is_raw_precision_matrix": False,
             "is_sparse_expected": True,
-            "alpha_status": "not_available_in_existing_cache",
+            "alpha_status": alpha_status,
             "note": (
                 "La matriz cacheada se interpreta como forma normalizada tipo correlacion parcial "
-                "derivada de la precision estimada; no se recupera alpha por sujeto desde caches antiguos."
+                f"derivada de la precision estimada; {alpha_note}"
             ),
         }
     ]
     path = tables_dir / "lasso_method_metadata.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def _fmt(value: object, digits: int = 4) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "NA"
+    if not np.isfinite(number):
+        return "NA"
+    return f"{number:.{digits}f}"
+
+
+def generate_interpretation_report(source_dir: str | Path, output_dir: str | Path) -> Path:
+    source_dir = _as_path(source_dir)
+    output_dir = _as_path(output_dir)
+    tables_dir = output_dir / "tables"
+    top_path = tables_dir / "top_different_connections.csv"
+    support_path = tables_dir / "support_metrics_summary.csv"
+    lasso_meta_path = tables_dir / "lasso_method_metadata.csv"
+
+    missing = [path for path in [top_path, support_path, lasso_meta_path] if not path.exists()]
+    if missing:
+        preview = "\n".join(str(path) for path in missing)
+        raise FileNotFoundError(f"Faltan tablas para generar la interpretacion:\n{preview}")
+
+    top = pd.read_csv(top_path)
+    support = pd.read_csv(support_path)
+    lasso_meta = pd.read_csv(lasso_meta_path)
+
+    cohort = support.groupby("group")["n_subjects"].max().to_dict()
+    methods = list(dict.fromkeys(top["method"].astype(str)))
+    threshold = float(support["threshold"].max()) if not support.empty else np.nan
+    support_ref = support[np.isclose(support["threshold"].astype(float), threshold)].copy()
+
+    lines = [
+        "# Interpretacion de resultados",
+        "",
+        "## Contexto",
+        "",
+        f"- Corrida base: `{source_dir}`",
+        f"- Salida v9: `{output_dir}`",
+        f"- Cohorte: Control={int(cohort.get('Control', 0))}, TEA={int(cohort.get('TEA', 0))}.",
+        f"- Metodos analizados: {', '.join(methods)}.",
+        "",
+        "Esta interpretacion resume diferencias descriptivas entre grupos. No debe leerse como prueba causal clinica ni como biomarcador validado independiente.",
+        "",
+        "## Lectura por metodo",
+        "",
+    ]
+
+    for method in methods:
+        method_top = top[top["method"].eq(method)].copy()
+        if method_top.empty:
+            continue
+        best = method_top.sort_values("abs_difference", ascending=False).iloc[0]
+        counts = method_top["sign_interpretation"].value_counts().to_dict()
+        higher = int(counts.get("higher_in_TEA", 0))
+        lower = int(counts.get("lower_in_TEA", 0))
+        direction = str(best.get("direction", ""))
+        lines.extend(
+            [
+                f"### {method}",
+                "",
+                f"- Conexion con mayor diferencia absoluta: `{best['roi_i']}` -> `{best['roi_j']}`.",
+                f"- Valor Control={_fmt(best['control_value'])}, TEA={_fmt(best['tea_value'])}, TEA-Control={_fmt(best['difference_tea_minus_control'])}.",
+                f"- En el top {len(method_top)}, conexiones mayores en TEA={higher} y menores en TEA={lower}.",
+                f"- Tipo de matriz: {direction}.",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "## Magnitud y soporte",
+            "",
+            f"Resumen usando umbral {threshold:g} para contar conexiones no nulas en matrices promedio.",
+            "",
+            "| Metodo | Grupo | Magnitud media abs. | Sparsity | Conexiones no nulas | Total |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for _, row in support_ref.sort_values(["method", "group"]).iterrows():
+        lines.append(
+            "| "
+            f"{row['method']} | {row['group']} | "
+            f"{_fmt(row['mean_abs_magnitude_group_matrix'])} | "
+            f"{_fmt(row['sparsity_group_matrix'])} | "
+            f"{int(row['n_nonzero'])} | {int(row['n_total_connections'])} |"
+        )
+
+    if not lasso_meta.empty:
+        meta = lasso_meta.iloc[0]
+        lines.extend(
+            [
+                "",
+                "## Nota metodologica sobre Lasso",
+                "",
+                f"- Implementacion interna: `{meta.get('implementation_name', 'graphical_lasso')}`.",
+                f"- Matriz guardada: `{meta.get('stored_matrix', 'normalized_partial_correlation_from_precision')}`.",
+                f"- Alpha: `{meta.get('alpha_status', 'NA')}`.",
+                f"- Nota: {meta.get('note', '')}",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Frase sugerida para la tesis",
+            "",
+            (
+                "Las matrices promedio muestran patrones de conectividad diferenciables entre Control y TEA, "
+                "pero la interpretacion debe mantenerse como evidencia empirica descriptiva dentro de esta cohorte. "
+                "Pearson resume conectividad funcional clasica, Lasso aproxima asociaciones directas sparse mediante "
+                "precision regularizada, y LiNGAM se reporta como analisis direccional exploratorio."
+            ),
+            "",
+        ]
+    )
+
+    path = output_dir / "interpretacion_resultados.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
@@ -452,8 +605,10 @@ def run_group_connectivity_analysis(
     top_all.to_csv(output_dir / "tables" / "top_different_connections.csv", index=False)
 
     pd.DataFrame(support_rows).to_csv(output_dir / "tables" / "support_metrics_summary.csv", index=False)
-    metadata_path = build_method_metadata(output_dir)
+    metadata_path = build_method_metadata(output_dir, source_dir=source_dir)
+    interpretation_path = generate_interpretation_report(source_dir, output_dir)
     outputs["top_connections"] = str(output_dir / "tables" / "top_different_connections.csv")
     outputs["support_metrics"] = str(output_dir / "tables" / "support_metrics_summary.csv")
     outputs["lasso_metadata"] = str(metadata_path)
+    outputs["interpretation_report"] = str(interpretation_path)
     return outputs

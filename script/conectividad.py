@@ -21,9 +21,12 @@ Dependencias:
   pip install nilearn scikit-learn statsmodels tigramite
 """
 
+import warnings
+
 import numpy as np
 from nilearn.connectome import ConnectivityMeasure
-from sklearn.covariance import GraphicalLassoCV
+from sklearn.covariance import GraphicalLasso, GraphicalLassoCV
+from sklearn.exceptions import ConvergenceWarning
 from statsmodels.tsa.stattools import grangercausalitytests
 
 
@@ -73,7 +76,7 @@ def correlacion_parcial(roi_signals_filt):
     return measure.fit_transform([roi_signals_filt])[0]
 
 
-def graphical_lasso(roi_signals_filt, cv=5, max_iter=500):
+def _graphical_lasso_legacy(roi_signals_filt, cv=5, max_iter=500):
     """
     Graphical Lasso real con penalización L1 (sklearn GraphicalLassoCV).
 
@@ -113,6 +116,119 @@ def graphical_lasso(roi_signals_filt, cv=5, max_iter=500):
           f'{n_nz}/{n_tot} entradas no nulas ({100*n_nz/n_tot:.1f}% sparse)')
 
     return gl_norm, model.alpha_
+
+
+def graphical_lasso(roi_signals_filt, cv=None, max_iter=500, alpha=0.2):
+    """
+    Graphical Lasso robusto para fMRI.
+
+    Si hay ROIs con NaN/inf o varianza cero/casi cero, se excluyen del ajuste y
+    quedan en cero en la matriz final. Por defecto usa alpha fijo para evitar
+    el costo de GraphicalLassoCV sujeto por sujeto. Si cv no es None, intenta CV.
+    """
+    x = np.asarray(roi_signals_filt, dtype=float)
+    if x.ndim != 2:
+        raise ValueError(f"GraphicalLasso espera array 2D (T, n_rois); recibido shape={x.shape}")
+
+    T, n_rois = x.shape
+    finite_roi = np.all(np.isfinite(x), axis=0)
+    variances = np.nanvar(x, axis=0)
+    valid_roi = finite_roi & (variances > 1e-12)
+    valid_idx = np.where(valid_roi)[0]
+    n_valid = len(valid_idx)
+    n_bad = n_rois - n_valid
+
+    if n_bad:
+        print(
+            f"[AVISO] GraphicalLasso: {n_bad} ROI(s) con NaN/inf o varianza cero/casi cero. "
+            "Se excluyen del ajuste y quedan en 0."
+        )
+    if n_valid < 2:
+        raise ValueError("GraphicalLasso no tiene suficientes ROIs validas despues de filtrar varianza.")
+
+    x_valid = x[:, valid_roi]
+    x_valid = x_valid - np.mean(x_valid, axis=0, keepdims=True)
+    std = np.std(x_valid, axis=0, ddof=0, keepdims=True)
+    std[std < 1e-12] = 1.0
+    x_valid = x_valid / std
+
+    alpha_used = np.nan
+    fit_mode = "GraphicalLasso_fixed"
+
+    try:
+        if cv is None:
+            model = GraphicalLasso(
+                alpha=alpha,
+                max_iter=max_iter,
+                assume_centered=True,
+            )
+        else:
+            cv_eff = max(2, min(int(cv), T - 1))
+            fit_mode = "GraphicalLassoCV"
+            model = GraphicalLassoCV(cv=cv_eff, max_iter=max_iter, assume_centered=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            warnings.simplefilter("ignore", RuntimeWarning)
+            model.fit(x_valid)
+        prec_valid = np.asarray(model.precision_, dtype=float)
+        alpha_used = float(model.alpha_ if hasattr(model, "alpha_") else alpha)
+        if not np.isfinite(prec_valid).all():
+            raise FloatingPointError("GraphicalLasso produjo precision no finita.")
+    except Exception as exc:
+        fit_mode = "GraphicalLasso_fallback"
+        fallback_errors = []
+        prec_valid = None
+        for alpha in (0.05, 0.1, 0.2, 0.5, 1.0):
+            try:
+                model = GraphicalLasso(
+                    alpha=alpha,
+                    max_iter=max_iter,
+                    assume_centered=True,
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", ConvergenceWarning)
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    model.fit(x_valid)
+                candidate = np.asarray(model.precision_, dtype=float)
+                if np.isfinite(candidate).all():
+                    prec_valid = candidate
+                    alpha_used = float(alpha)
+                    break
+                fallback_errors.append(f"alpha={alpha}: precision no finita")
+            except Exception as fallback_exc:
+                fallback_errors.append(f"alpha={alpha}: {fallback_exc}")
+        if prec_valid is None:
+            details = "; ".join(fallback_errors[:3])
+            raise RuntimeError(
+                "GraphicalLasso fallo incluso con fallback regularizado. "
+                f"Error original: {exc}. Fallbacks: {details}"
+            ) from exc
+        print(
+            "[AVISO] GraphicalLasso fue inestable para este sujeto; "
+            f"se uso fallback regularizado con alpha={alpha_used:.4f}."
+        )
+
+    diag = np.diag(prec_valid)
+    diag = np.where(diag > 1e-12, diag, np.nan)
+    denom = np.sqrt(np.outer(diag, diag))
+    gl_valid = -prec_valid / denom
+    gl_valid = np.nan_to_num(gl_valid, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(gl_valid, 1.0)
+
+    gl_norm = np.zeros((n_rois, n_rois), dtype=float)
+    gl_norm[np.ix_(valid_idx, valid_idx)] = gl_valid
+    np.fill_diagonal(gl_norm, 1.0)
+    gl_norm = np.clip(gl_norm, -1.0, 1.0)
+
+    upper = np.triu_indices(n_rois, k=1)
+    n_nz = int(np.sum(np.abs(gl_norm[upper]) > 1e-12))
+    n_tot = len(upper[0])
+    print(
+        f"GraphicalLasso ({fit_mode}): alpha={alpha_used:.4f} | "
+        f"{n_nz}/{n_tot} entradas no nulas ({100*n_nz/n_tot:.1f}%)"
+    )
+
+    return gl_norm, alpha_used
 
 
 # ─────────────────────────────────────────────────────────────────────────────
