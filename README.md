@@ -87,12 +87,9 @@ band-pass local y regenerarse el cache ROI.
   (300 arboles, pesos balanceados).
 - Evaluacion: 5 folds con `StratifiedGroupKFold`, agrupados por sitio.
 
-La seleccion de `alpha=0.5` proviene de una validacion tecnica piloto con 5
-controles y 5 sujetos TEA, una grilla `[0.05, 0.1, 0.2, 0.3, 0.5]` y una
-densidad objetivo de 0.12. Es una justificacion exploratoria, no una
-optimizacion formal de hiperparametros.
+La seleccion de `alpha=0.5` esto modificar xq quedo malito
 
-DirectLiNGAM devuelve una matriz dirigida. En esta implementacion, cada matriz
+LiNGAM devuelve una matriz dirigida. En esta implementacion, cada matriz
 se divide por el mayor coeficiente absoluto del mismo sujeto. Por eso sus
 valores son pesos relativos dentro de cada sujeto y no coeficientes causales
 crudos comparables en escala absoluta entre sujetos.
