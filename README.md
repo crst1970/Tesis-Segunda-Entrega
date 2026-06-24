@@ -1,54 +1,109 @@
-# Pipeline ABIDE fMRI con Schaefer 100 y filtro temporal
+# Tesis Segunda Entrega - Pipeline ABIDE I
 
-Este pipeline clasifica TEA/ASD vs Control usando ABIDE PCP y un atlas unico por corrida. La configuracion principal actual usa `schaefer_100` con `max_rois=100` y `min_timepoints=146` para excluir sujetos con series temporales demasiado cortas para metodos multivariados/direccionales.
+Pipeline reproducible para comparar conectividad cerebral entre sujetos TEA y
+controles usando rs-fMRI de ABIDE I.
 
-```text
-ABIDE func_preproc
--> Atlas Schaefer 100
--> Filtro temporal: timepoints >= 146
--> Senales ROI
--> Conectividad
-   -> Analisis principal: Pearson, Graphical Lasso, LiNGAM
-   -> Implementados pero excluidos por ahora: correlacion parcial, Granger, PCMCI
--> Vectorizacion
--> Clasificacion: SVM, Random Forest
--> Evaluacion, predicciones y visualizaciones
-```
-
-## Separacion v8/v9
-
-- `pipeline_v8.ipynb`: calcula matrices, vectoriza y clasifica TEA vs Control con SVM y Random Forest.
-- `pipeline_versiones9.ipynb`: usa las matrices generadas por v8 para el analisis Control vs TEA: matrices promedio, diferencia TEA-Control, magnitud, sparsity y conexiones mas diferentes.
-
-## Politica de atlas
-
-El proyecto usa atlas local sobre NIfTI, no ROIs precomputadas de ABIDE PCP. La corrida actual usa `schaefer_100` con 100 ROIs y filtra sujetos con menos de 146 timepoints; `craddock_cc200` y `destrieux_2009` siguen disponibles para comparaciones controladas si se ejecutan en carpetas de salida separadas.
-
-## Ejecucion recomendada
-
-Si los datos ya estan en el disco duro, no los descargues de nuevo. La configuracion actual de `pipeline_v8.ipynb` busca primero:
+## Flujo principal
 
 ```text
-D:/Carpeta Cristian/Datos_tesis/ABIDE_pcp/cpac/filt_noglobal
+ABIDE PCP / C-PAC / func_preproc / filt_noglobal
+-> atlas Schaefer 2018 de 100 ROIs corticales
+-> promedio BOLD por ROI
+-> z-score por ROI (sin segundo band-pass local)
+-> filtro de sujetos con T >= 146
+-> conectividad por sujeto
+   -> correlacion de Pearson
+   -> Graphical Lasso, alpha fijo 0.5
+   -> DirectLiNGAM, dirigido y normalizado por sujeto
+-> vectorizacion
+-> SVM RBF y Random Forest
+-> validacion cruzada estratificada y agrupada por sitio
+-> comparacion descriptiva Control vs TEA
 ```
 
-En esa carpeta ABIDE PCP ya aplico band-pass, por eso `pipeline_v8.ipynb` deja `APPLY_BANDPASS=False` automaticamente.
+La corrida reportada en el paper contiene 723 sujetos: 329 TEA y 394
+controles, provenientes de 17 sitios. Antes del filtro temporal habia 871
+sujetos; se excluyeron 148 con menos de 146 volumenes.
 
-Si necesitas descargar desde cero en otra maquina, desde la raiz de `Tesis Segunda Entrega` puedes usar:
+## Orden de ejecucion
 
-```powershell
-python script/descargar_abide.py `
-  --derivative func_preproc `
-  --all-available
+1. `pipeline_v8.ipynb`
+   - carga y valida la cohorte;
+   - reutiliza o genera la parcelacion;
+   - calcula matrices individuales;
+   - vectoriza y clasifica;
+   - guarda la trazabilidad y las metricas.
+2. `pipeline_versiones9.ipynb`
+   - carga exclusivamente los resultados de v8;
+   - genera matrices promedio Control y TEA;
+   - calcula diferencias TEA - Control;
+   - produce heatmaps, conectomas top 20 y tablas interpretativas.
+3. `Tesis_Entrega_2/main.tex`
+   - consume las figuras y cifras reales de las dos etapas anteriores.
+
+## Archivos canonicos
+
+- `script/pipeline_abide.py`: orquestacion, validaciones, cache, vectorizacion
+  y evaluacion.
+- `script/parcelacion.py`: atlas y extraccion de senales ROI.
+- `script/filtrado.py`: band-pass opcional y z-score.
+- `script/conectividad.py`: Pearson, Graphical Lasso, LiNGAM y metodos
+  experimentales.
+- `pipeline_versiones9/analisis_control_tea.py`: analisis grupal y figuras.
+- `tests/test_pipeline_smoke.py`: pruebas rapidas de interfaces y formas.
+
+`script/clasificador.py` es un modulo legacy. No reproduce la validacion por
+sitio ni las metricas del paper y no debe usarse para la corrida principal.
+
+## Datos
+
+El notebook busca primero la variable de entorno `ABIDE_DATA_ROOT`. Si no esta
+definida, usa la ruta local historica `D:/Carpeta Cristian/Datos_tesis` cuando
+existe y, como respaldo, la carpeta `data/` del repositorio.
+
+Estructura esperada:
+
+```text
+ABIDE_DATA_ROOT/
+└── ABIDE_pcp/
+    ├── Phenotypic_V1_0b_preprocessed1.csv
+    └── cpac/
+        └── filt_noglobal/
+            └── *_func_preproc.nii.gz
 ```
 
-Si usas archivos en `filt_noglobal`, ABIDE PCP ya aplico band-pass; usa `--skip-bandpass` o `apply_bandpass=False` para evitar doble filtrado:
+La corrida principal usa `filt_noglobal`; por tanto, el pipeline no aplica un
+segundo band-pass local. Si se usa `nofilt_noglobal`, debe activarse el
+band-pass local y regenerarse el cache ROI.
+
+## Configuracion principal
+
+- Atlas: `schaefer_100`.
+- ROIs: 100, todas con al menos 100 voxeles tras remuestreo.
+- Longitud temporal minima: 146 volumenes.
+- Metodos: `pearson`, `graphical_lasso`, `lingam`.
+- Graphical Lasso: `alpha=0.5`.
+- Clasificadores: SVM RBF (`C=1`, pesos balanceados) y Random Forest
+  (300 arboles, pesos balanceados).
+- Evaluacion: 5 folds con `StratifiedGroupKFold`, agrupados por sitio.
+
+La seleccion de `alpha=0.5` proviene de una validacion tecnica piloto con 5
+controles y 5 sujetos TEA, una grilla `[0.05, 0.1, 0.2, 0.3, 0.5]` y una
+densidad objetivo de 0.12. Es una justificacion exploratoria, no una
+optimizacion formal de hiperparametros.
+
+DirectLiNGAM devuelve una matriz dirigida. En esta implementacion, cada matriz
+se divide por el mayor coeficiente absoluto del mismo sujeto. Por eso sus
+valores son pesos relativos dentro de cada sujeto y no coeficientes causales
+crudos comparables en escala absoluta entre sujetos.
+
+## Ejecucion por linea de comandos
 
 ```powershell
 python script/pipeline_abide.py `
   --source nifti_atlas `
-  --fmri-dir "D:\Carpeta Cristian\Datos_tesis\ABIDE_pcp\cpac\filt_noglobal" `
-  --phenotypic "D:\Carpeta Cristian\Datos_tesis\ABIDE_pcp\Phenotypic_V1_0b_preprocessed1.csv" `
+  --fmri-dir "$env:ABIDE_DATA_ROOT\ABIDE_pcp\cpac\filt_noglobal" `
+  --phenotypic "$env:ABIDE_DATA_ROOT\ABIDE_pcp\Phenotypic_V1_0b_preprocessed1.csv" `
   --output-dir resultados\pipeline_schaefer_100_all_valid_100rois_tp146 `
   --atlas-name schaefer_100 `
   --methods pearson graphical_lasso lingam `
@@ -57,68 +112,45 @@ python script/pipeline_abide.py `
   --max-rois 100 `
   --min-timepoints 146 `
   --cv-strategy group_site `
-  --granger-lag-strategy min_q `
-  --maxlag 1 `
-  --tau-max 1 `
+  --graphical-lasso-alpha 0.5 `
   --skip-bandpass
 ```
 
-## Validaciones
+## Dependencias y pruebas
 
-El pipeline valida atlas, orden de ROIs, shapes de senales, shapes de matrices, simetria en asociativos, diagonal/direccion en causales, numero de features, balance ASD/Control y particiones de validacion cruzada.
-
-## Salidas principales
-
-- `sujetos_incluidos.csv`: sujetos usados, etiqueta, sitio, timepoints y ROIs.
-- `resumen_timepoints_por_sitio_pre_filtro.csv`: distribucion de timepoints antes del filtro temporal.
-- `resumen_timepoints_por_sitio.csv`: distribucion de timepoints por sitio despues del filtro, ASD/Control y alertas `T <= ROIs`.
-- `trazabilidad_parcelacion_filtrado.csv`: origen, atlas y etapa de filtrado.
-- `parcelacion_atlas/`: atlas remuestreado, senales ROI y metadatos de parcelacion.
-- `filtrado_zscore/*.npy`: senales ROI estandarizadas por sujeto.
-- `matrices/<metodo>_<n>rois/*.npy`: matrices por sujeto y metodo.
-- `feature_maps/<metodo>_feature_map.csv`: orden exacto de features.
-- `X_<metodo>.npy` y `y_<metodo>.npy`: dataset vectorizado.
-- `conectividad_tablas/<metodo>_edges.csv`: conexiones ROI-ROI por sujeto.
-- `predicciones_por_sujeto.csv`: prediccion out-of-fold por sujeto.
-- `metricas_por_fold.csv`: accuracy, AUC, F1, precision y recall por fold/sitio.
-- `resumen_matrices_conectividad.csv`: densidad, sparsity, rango y simetria por matriz.
-- `tabla_comparativa_resultados.csv`: metricas out-of-fold globales y desviacion estandar por fold, incluyendo `balanced_accuracy` y `specificity` para cohortes no balanceadas.
-- `configuracion_pipeline.json`: parametros de ejecucion.
-
-## Uso desde notebook
-
-```python
-tabla = pipeline_abide.run_pipeline(
-    source="nifti_atlas",
-    fmri_dir=DATA_DIR,
-    phenotypic_csv=PHENO,
-    output_dir=OUT_MAIN,
-    atlas_name="schaefer_100",
-    methods=["pearson", "graphical_lasso", "lingam"],
-    classifiers=["svm", "rf"],
-    apply_bandpass=False,
-    cv_strategy="group_site",
-    granger_lag_strategy="min_q",
-    maxlag=1,
-    tau_max=1,
-    all_available=True,
-    max_rois=100,
-    min_timepoints=146,
-)
+```powershell
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
 ```
 
-## Notas conceptuales
+Los visores interactivos de las ultimas celdas de v8 requieren `ipywidgets` e
+`ipympl`. No son necesarios para recalcular matrices, metricas o el paper.
 
-Correlacion parcial, Granger y PCMCI siguen implementados, pero quedan comentados/excluidos del analisis principal actual. Si se usan, deben reportarse como analisis exploratorios o historicos en carpetas separadas.
+## Resultados principales
 
-Granger usa por defecto `min_q`: corrige todos los tests par-lag con FDR-BH y despues conserva el lag con menor q-value. Evita reportar como robustas conexiones que solo aparecen por escoger el menor p-value antes de corregir.
+La carpeta `resultados/` se excluye de Git por su tamano. Los archivos de mayor
+trazabilidad son:
 
-Schaefer 100 con `min_timepoints=146` conserva 100 ROIs, pero elimina sujetos cuya serie temporal es demasiado corta. Esto mejora la relacion entre observaciones temporales y variables cerebrales para Graphical Lasso y LiNGAM. Sigue siendo un compromiso, no una garantia causal: con fMRI BOLD los metodos direccionales deben interpretarse con prudencia.
+- `sujetos_incluidos.csv`
+- `configuracion_pipeline.json`
+- `trazabilidad_parcelacion_filtrado.csv`
+- `resumen_timepoints_por_sitio_pre_filtro.csv`
+- `resumen_timepoints_por_sitio.csv`
+- `matrices/<metodo>_100rois/`
+- `X_<metodo>.npy` y `y_<metodo>.npy`
+- `tabla_comparativa_resultados.csv`
+- `metricas_por_fold.csv`
+- `predicciones_por_sujeto.csv`
+- `resultados/pipeline_versiones9/figures/`
+- `resultados/pipeline_versiones9/tables/`
 
-Craddock CC200 puede usarse como analisis secundario de mayor resolucion, especialmente para metodos asociativos. Para causales, CC200 completo debe tratarse como experimento exploratorio por costo e inestabilidad.
+Los CSV completos de aristas ocupan aproximadamente 1.8 GB y no son necesarios
+para compilar el paper. Pueden regenerarse desde las matrices individuales.
 
-La parcelacion se cachea por sujeto. Al volver a ejecutar, el pipeline reutiliza `filtrado_zscore/<file_id>_roi_signals_z.npy` y `parcelacion_atlas/<file_id>/roi_metadata.json` cuando el atlas coincide, evitando reabrir el NIfTI y remuestrear el atlas para sujetos ya procesados.
+## Alcance
 
-Si falla la descarga `craddock_2011_parcellations.tar.gz` desde Nilearn/NITRC, el codigo intenta automaticamente un fallback al atlas `cc200_roi_atlas.nii.gz` de ABIDE/FCP-INDI. Si tampoco hay internet, descarga manualmente `https://fcp-indi.s3.amazonaws.com/data/Projects/ABIDE/Resources/cc200_roi_atlas.nii.gz` y dejalo en `~/nilearn_data/abide_cc200/cc200_roi_atlas.nii.gz`.
-
-LiNGAM se incluye para comparacion causal exploratoria, pero sus supuestos deben declararse: linealidad, no gaussianidad e independencia de errores. En BOLD/fMRI su interpretacion debe ser prudente por hemodinamica, bajo numero de timepoints y ruido. El codigo ahora falla de forma explicita si `T <= ROIs`; para LiNGAM usa `--max-rois`, un atlas de menor dimension o reduccion PCA/ICA previa.
+Correlacion parcial, Granger y PCMCI permanecen como metodos experimentales y
+no forman parte del paper ni de los resultados principales. LiNGAM debe
+interpretarse como analisis dirigido exploratorio: la senal BOLD, la respuesta
+hemodinamica y la ausencia de pruebas inferenciales impiden afirmar causalidad
+clinica o biomarcadores validados.

@@ -1,0 +1,21 @@
+# Entorno principal auditado el 22-06-2026.
+numpy==2.2.6
+pandas==2.3.2
+scipy==1.16.3
+scikit-learn==1.7.2
+matplotlib==3.10.6
+nilearn==0.13.1
+nibabel==5.4.2
+statsmodels==0.14.6
+lingam==1.12.2
+requests>=2.31
+certifi>=2024.2
+IPython>=9.0
+nbformat>=5.10
+
+# Visores interactivos usados por las celdas opcionales de pipeline_v8.ipynb.
+ipywidgets>=8.1
+ipympl>=0.9
+
+# Opcional: solo para el metodo PCMCI experimental, excluido del paper.
+# tigramite>=5.2

@@ -5,6 +5,7 @@ resultados/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+tmp/
 
 # Temporales de Office/OneDrive
 ~$*
@@ -16,3 +17,15 @@ __pycache__/
 *.pkl
 *.joblib
 *.part
+
+# Artefactos auxiliares de LaTeX (se conserva el PDF final)
+Tesis_Entrega_2/build/
+Tesis_Entrega_2/*.aux
+Tesis_Entrega_2/*.bbl
+Tesis_Entrega_2/*.blg
+Tesis_Entrega_2/*.fdb_latexmk
+Tesis_Entrega_2/*.fls
+Tesis_Entrega_2/*.log
+Tesis_Entrega_2/*.out
+Tesis_Entrega_2/*.synctex.gz
+Tesis_Entrega_2/*.toc

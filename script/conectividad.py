@@ -6,11 +6,12 @@ Métodos de conectividad funcional sobre señales ROI para fMRI resting-state.
 MÉTODOS ASOCIATIVOS (simétricos — matrix[i,j] == matrix[j,i]):
   1. correlacion          : Correlación de Pearson
   2. correlacion_parcial  : Correlación parcial (Nilearn)
-  3. graphical_lasso      : GL real con penalización L1 (sklearn GraphicalLassoCV)
+  3. graphical_lasso      : GL con penalización L1 y alpha fijo o CV
 
 MÉTODOS CAUSALES (asimétricos — matrix[i,j] ≠ matrix[j,i]):
   4. granger              : Granger causality (statsmodels)
   5. pcmci                : PCMCI — causalidad para series temporales (tigramite)
+  6. lingam               : DirectLiNGAM contemporáneo (lingam)
 
 UTILIDADES:
   - umbralizar            : pone en cero entradas bajo el umbral
@@ -27,6 +28,7 @@ import numpy as np
 from nilearn.connectome import ConnectivityMeasure
 from sklearn.covariance import GraphicalLasso, GraphicalLassoCV
 from sklearn.exceptions import ConvergenceWarning
+from statsmodels.stats.multitest import fdrcorrection
 from statsmodels.tsa.stattools import grangercausalitytests
 
 
@@ -78,6 +80,9 @@ def correlacion_parcial(roi_signals_filt):
 
 def _graphical_lasso_legacy(roi_signals_filt, cv=5, max_iter=500):
     """
+    Implementación legacy conservada para referencia. La corrida principal usa
+    ``graphical_lasso`` con alpha fijo y validaciones explícitas.
+
     Graphical Lasso real con penalización L1 (sklearn GraphicalLassoCV).
 
     IMPORTANTE: kind='precision' de Nilearn NO es Graphical Lasso real —
@@ -175,6 +180,13 @@ def graphical_lasso(roi_signals_filt, cv=None, max_iter=500, alpha=0.2):
         if not np.isfinite(prec_valid).all():
             raise FloatingPointError("GraphicalLasso produjo precision no finita.")
     except Exception as exc:
+        if cv is None:
+            raise RuntimeError(
+                f"GraphicalLasso fallo con el alpha fijo solicitado ({alpha}). "
+                "No se cambia alpha silenciosamente porque eso invalidaria la "
+                "comparacion entre sujetos."
+            ) from exc
+
         fit_mode = "GraphicalLasso_fallback"
         fallback_errors = []
         prec_valid = None
@@ -235,7 +247,12 @@ def graphical_lasso(roi_signals_filt, cv=None, max_iter=500, alpha=0.2):
 # MÉTODOS CAUSALES
 # ─────────────────────────────────────────────────────────────────────────────
 
-def granger(roi_signals_filt, maxlag=2, significance=0.05):
+def granger(
+    roi_signals_filt,
+    maxlag=2,
+    significance=0.05,
+    lag_strategy="min_q",
+):
     """
     Granger causality entre todas las parejas de ROIs.
 
@@ -246,7 +263,9 @@ def granger(roi_signals_filt, maxlag=2, significance=0.05):
     Eso captura la dirección de la influencia temporal — diferencia clave
     frente a todos los métodos asociativos (que son simétricos).
 
-    Valores: -log10(p-value). Umbral de significancia: -log10(0.05) ≈ 1.3.
+    Valores: -log10(valor seleccionado). Con ``lag_strategy='min_q'`` se
+    corrigen conjuntamente todos los tests ROI-par-lag mediante FDR-BH y se
+    conserva el menor q-value por direccion.
     Limitación: asume linealidad y estacionariedad. No controla
     autocorrelación de las señales (PCMCI lo hace mejor).
 
@@ -260,10 +279,19 @@ def granger(roi_signals_filt, maxlag=2, significance=0.05):
     -------
     granger_matrix : array (n_rois, n_rois) — -log10(p-value), asimétrica
                      granger_matrix[i, j] = intensidad de influencia i → j
-    pval_matrix    : array (n_rois, n_rois) — p-values crudos
+    selected_values: array (n_rois, n_rois) — q-values o p-values elegidos
+                     según ``lag_strategy``
     """
     T, n_rois = roi_signals_filt.shape
-    pval_matrix = np.ones((n_rois, n_rois))
+    if maxlag < 1:
+        raise ValueError("maxlag debe ser al menos 1.")
+    valid_strategies = {"min_q", "min_p", "maxlag", "mean_p"}
+    if lag_strategy not in valid_strategies:
+        raise ValueError(
+            f"lag_strategy={lag_strategy!r} no valido. Usa: {sorted(valid_strategies)}"
+        )
+
+    pvals_by_lag = np.ones((n_rois, n_rois, maxlag), dtype=float)
 
     print(f'Calculando Granger ({n_rois}x{n_rois} pares, maxlag={maxlag})...')
 
@@ -276,24 +304,46 @@ def granger(roi_signals_filt, maxlag=2, significance=0.05):
                                     roi_signals_filt[:, i]])
             try:
                 res = grangercausalitytests(data, maxlag=maxlag, verbose=False)
-                pval_matrix[i, j] = res[1][0]['ssr_ftest'][1]
+                for lag in range(1, maxlag + 1):
+                    pvals_by_lag[i, j, lag - 1] = res[lag][0]["ssr_ftest"][1]
             except Exception:
-                pval_matrix[i, j] = 1.0
+                pvals_by_lag[i, j, :] = 1.0
 
-    granger_matrix = -np.log10(np.clip(pval_matrix, 1e-10, 1.0))
+    if lag_strategy == "min_q":
+        off_diag = ~np.eye(n_rois, dtype=bool)
+        tested = pvals_by_lag[off_diag].reshape(-1)
+        _, corrected = fdrcorrection(tested, alpha=significance)
+        qvals_by_lag = np.ones_like(pvals_by_lag)
+        qvals_by_lag[off_diag] = corrected.reshape(-1, maxlag)
+        selected_values = np.min(qvals_by_lag, axis=2)
+    elif lag_strategy == "min_p":
+        selected_values = np.min(pvals_by_lag, axis=2)
+    elif lag_strategy == "maxlag":
+        selected_values = pvals_by_lag[:, :, -1]
+    else:
+        selected_values = np.mean(pvals_by_lag, axis=2)
+
+    granger_matrix = -np.log10(np.clip(selected_values, 1e-10, 1.0))
     np.fill_diagonal(granger_matrix, 0)
+    np.fill_diagonal(selected_values, 1.0)
 
     mask_off = ~np.eye(n_rois, dtype=bool)
-    n_sig    = np.sum(pval_matrix[mask_off] < significance)
+    n_sig    = np.sum(selected_values[mask_off] < significance)
     n_total  = n_rois * (n_rois - 1)
-    print(f'Granger listo. Conexiones p<{significance}: '
+    value_name = "q" if lag_strategy == "min_q" else "p"
+    print(f'Granger listo ({lag_strategy}). Conexiones {value_name}<{significance}: '
           f'{n_sig}/{n_total} ({100*n_sig/n_total:.1f}%)')
     print(f'Asimetrica: {not np.allclose(granger_matrix, granger_matrix.T)}')
 
-    return granger_matrix, pval_matrix
+    return granger_matrix, selected_values
 
 
-def pcmci(roi_signals_filt, tau_max=2, pc_alpha=0.05):
+def pcmci(
+    roi_signals_filt,
+    tau_max=2,
+    pc_alpha=0.05,
+    value_mode="signed_logp",
+):
     """
     PCMCI (Peter-Clark + Momentary Conditional Independence).
 
@@ -317,7 +367,8 @@ def pcmci(roi_signals_filt, tau_max=2, pc_alpha=0.05):
 
     Retorna
     -------
-    pcmci_matrix : array (n_rois, n_rois) — -log10(p_min sobre lags), asimétrica
+    pcmci_matrix : array (n_rois, n_rois) — efecto o
+                   sign(efecto)*-log10(p_min), asimétrica
     val_matrix   : array (n_rois, n_rois, tau_max+1) — coeficientes por lag
     pval_matrix  : array (n_rois, n_rois, tau_max+1) — p-values por lag
     """
@@ -341,9 +392,25 @@ def pcmci(roi_signals_filt, tau_max=2, pc_alpha=0.05):
     pval_matrix = res['p_matrix']   # (n_rois, n_rois, tau_max+1)
     val_matrix  = res['val_matrix']
 
-    # Tomar el p-value minimo entre lags tau=1..tau_max (excluir tau=0)
-    pmin         = pval_matrix[:, :, 1:].min(axis=2)
-    pcmci_matrix = -np.log10(np.clip(pmin, 1e-10, 1.0))
+    if value_mode not in {"signed_logp", "effect"}:
+        raise ValueError("value_mode debe ser 'signed_logp' o 'effect'.")
+
+    # Tomar el lag mas significativo entre tau=1..tau_max (excluir tau=0).
+    lag_pvals = pval_matrix[:, :, 1:]
+    best_lag = np.argmin(lag_pvals, axis=2)
+    pmin = np.take_along_axis(lag_pvals, best_lag[..., None], axis=2)[..., 0]
+    lag_effects = val_matrix[:, :, 1:]
+    best_effect = np.take_along_axis(
+        lag_effects,
+        best_lag[..., None],
+        axis=2,
+    )[..., 0]
+    if value_mode == "effect":
+        pcmci_matrix = best_effect
+    else:
+        pcmci_matrix = np.sign(best_effect) * -np.log10(
+            np.clip(pmin, 1e-10, 1.0)
+        )
     np.fill_diagonal(pcmci_matrix, 0)
 
     mask_off = ~np.eye(n_rois, dtype=bool)

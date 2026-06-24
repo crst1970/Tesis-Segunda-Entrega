@@ -1,6 +1,11 @@
 """
 clasificador.py
 ---------------
+MODULO LEGACY: se conserva solo como referencia historica. La corrida principal
+y los notebooks v8/v9 usan la evaluacion implementada en ``pipeline_abide.py``,
+que agrupa la validacion cruzada por sitio. No usar este archivo para reproducir
+las metricas del paper.
+
 Clasificación ASD vs Control usando matrices de conectividad fMRI.
 
 Pipeline completo:

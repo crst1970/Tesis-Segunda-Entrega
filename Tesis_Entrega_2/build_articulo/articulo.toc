@@ -1,0 +1,49 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {section}{\numberline {1}\MakeUppercase []{Introducción}}{1}{section*.1}%
+\contentsline {subsection}{\numberline {1.1}Objetivo general}{1}{section*.2}%
+\contentsline {subsection}{\numberline {1.2}Objetivos específicos}{1}{section*.3}%
+\contentsline {section}{\numberline {2}\MakeUppercase []{Marco teórico}}{1}{section*.4}%
+\contentsline {subsection}{\numberline {2.1}Resonancia magnética funcional en reposo}{1}{section*.5}%
+\contentsline {subsection}{\numberline {2.2}Señal BOLD}{2}{section*.6}%
+\contentsline {subsection}{\numberline {2.3}Parcelación cerebral y regiones de interés}{2}{section*.7}%
+\contentsline {subsection}{\numberline {2.4}Conectividad cerebral}{2}{section*.8}%
+\contentsline {subsection}{\numberline {2.5}Métodos asociativos}{2}{section*.9}%
+\contentsline {subsubsection}{\numberline {2.5.1}Correlación de Pearson}{2}{section*.10}%
+\contentsline {subsubsection}{\numberline {2.5.2}Graphical Lasso}{2}{section*.11}%
+\contentsline {subsection}{\numberline {2.6}Métodos dirigidos exploratorios}{2}{section*.12}%
+\contentsline {subsubsection}{\numberline {2.6.1}LiNGAM}{2}{section*.13}%
+\contentsline {subsection}{\numberline {2.7}Aprendizaje automático para clasificación}{2}{section*.14}%
+\contentsline {subsubsection}{\numberline {2.7.1}SVM y Random Forest}{2}{section*.15}%
+\contentsline {subsection}{\numberline {2.8}Métricas de evaluación}{2}{section*.16}%
+\contentsline {section}{\numberline {3}\MakeUppercase []{Estado del arte}}{2}{section*.17}%
+\contentsline {subsection}{\numberline {3.1}Conectividad funcional en TEA}{2}{section*.18}%
+\contentsline {subsection}{\numberline {3.2}ABIDE y clasificación de TEA con rs-fMRI}{2}{section*.19}%
+\contentsline {subsection}{\numberline {3.3}Métodos asociativos en rs-fMRI}{3}{section*.20}%
+\contentsline {subsection}{\numberline {3.4}Métodos dirigidos exploratorios en rs-fMRI}{3}{section*.21}%
+\contentsline {subsection}{\numberline {3.5}Vacío abordado por este trabajo}{3}{section*.22}%
+\contentsline {section}{\numberline {4}\MakeUppercase []{Metodología e Implementación}}{3}{section*.23}%
+\contentsline {subsection}{\numberline {4.1}Conjunto de datos}{3}{section*.24}%
+\contentsline {subsection}{\numberline {4.2}Preprocesamiento}{3}{section*.26}%
+\contentsline {subsection}{\numberline {4.3}Parcelación cerebral y extracción de ROIs}{3}{section*.27}%
+\contentsline {subsection}{\numberline {4.4}Covariables y control de movimiento}{4}{section*.29}%
+\contentsline {subsection}{\numberline {4.5}Inferencia estadística}{4}{section*.30}%
+\contentsline {subsection}{\numberline {4.6}Estimación de conectividad asociativa}{4}{section*.31}%
+\contentsline {subsubsection}{\numberline {4.6.1}Correlación de Pearson}{5}{section*.32}%
+\contentsline {subsubsection}{\numberline {4.6.2}Graphical Lasso}{5}{section*.33}%
+\contentsline {subsection}{\numberline {4.7}Estimación dirigida exploratoria}{5}{section*.34}%
+\contentsline {subsubsection}{\numberline {4.7.1}LiNGAM}{5}{section*.35}%
+\contentsline {subsection}{\numberline {4.8}Vectorización de matrices}{5}{section*.36}%
+\contentsline {subsection}{\numberline {4.9}Clasificación}{5}{section*.37}%
+\contentsline {subsection}{\numberline {4.10}Evaluación y comparación entre métodos}{6}{section*.38}%
+\contentsline {section}{\numberline {5}\MakeUppercase []{Resultados}}{6}{section*.40}%
+\contentsline {subsection}{\numberline {5.1}Matrices de conectividad asociativa}{6}{section*.41}%
+\contentsline {subsection}{\numberline {5.2}Resultados de representación dirigida exploratoria mediante \mbox {LiNGAM}}{8}{section*.46}%
+\contentsline {subsection}{\numberline {5.3}Componentes significativos mediante NBS}{9}{section*.49}%
+\contentsline {subsection}{\numberline {5.4}Clasificación supervisada}{10}{section*.53}%
+\contentsline {section}{\numberline {6}\MakeUppercase []{Discusión}}{11}{section*.56}%
+\contentsline {subsection}{\numberline {6.1}Interpretación de las diferencias en redes cerebrales}{11}{section*.57}%
+\contentsline {subsection}{\numberline {6.2}Relación de los hallazgos con la literatura}{11}{section*.58}%
+\contentsline {subsection}{\numberline {6.3}Comparación metodológica entre Pearson, Graphical Lasso y LiNGAM}{12}{section*.60}%
+\contentsline {subsection}{\numberline {6.4}Clasificación como evaluación complementaria}{12}{section*.61}%
+\contentsline {subsection}{\numberline {6.5}Limitaciones metodológicas}{12}{section*.62}%
+\contentsline {section}{\numberline {7}\MakeUppercase []{Conclusión}}{12}{section*.63}%

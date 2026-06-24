@@ -9,7 +9,8 @@ Funciones:
   - precalcular_cache_roi  : pre-calcula señal orig+filtrada para los visores
 
 Atlas disponibles (pasar como atlas_name):
-  - 'cort-maxprob-thr25-2mm'   Harvard-Oxford cortical  (default, ~48 regiones)
+  - 'schaefer_100'             Schaefer 2018, 100 regiones corticales (default)
+  - 'cort-maxprob-thr25-2mm'   Harvard-Oxford cortical (~48 regiones)
   - 'sub-maxprob-thr25-2mm'    Harvard-Oxford subcortical
   - 'AAL'                      Automated Anatomical Labeling (~116 regiones)
   - 'destrieux_2009'           Destrieux (~148 regiones)
@@ -57,7 +58,8 @@ def cargar_atlas(fmri_img, atlas_name=ATLAS_DEFAULT):
     ----------
     fmri_img   : Nifti1Image — imagen fMRI 4D del sujeto (nibabel)
     atlas_name : str         — nombre del atlas a usar. Opciones:
-                               'cort-maxprob-thr25-2mm'  Harvard-Oxford cortical (default)
+                               'schaefer_100'            Schaefer 2018 (default)
+                               'cort-maxprob-thr25-2mm'  Harvard-Oxford cortical
                                'sub-maxprob-thr25-2mm'   Harvard-Oxford subcortical
                                'AAL'                     Automated Anatomical Labeling
                                'destrieux_2009'          Destrieux

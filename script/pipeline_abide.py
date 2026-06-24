@@ -14,7 +14,7 @@ Pipeline reproducible para ABIDE/fMRI usando atlas volumetrico configurable:
 8. Guarda matrices, visor de conectividad, curvas ROC, predicciones por sujeto
    y tabla comparativa CSV.
 
-Uso desde PowerShell, dentro de Pipeline_manual/notebooks:
+Uso desde PowerShell, desde la raiz del repositorio:
 
     python script/pipeline_abide.py `
       --source nifti_atlas `
@@ -259,12 +259,6 @@ def load_roi_1d(path: Path, max_rois: Optional[int] = None) -> np.ndarray:
     raise RuntimeError(
         "Flujo ROI precomputado deshabilitado. Use source='nifti_atlas' con atlas local."
     )
-    signals = limpiar_numericos(np.loadtxt(path), nombre=f"senales ROI {path.name}")
-    if signals.ndim != 2:
-        raise ValueError(f"{path} no tiene una matriz 2D valida")
-    if max_rois is not None:
-        signals = signals[:, :max_rois]
-    return limpiar_numericos(zscore_rois(signals), nombre=f"zscore {path.name}")
 
 
 def load_subjects_from_roi_files(
@@ -280,73 +274,6 @@ def load_subjects_from_roi_files(
     raise RuntimeError(
         "Flujo ROI precomputado deshabilitado. Use source='nifti_atlas' con atlas local."
     )
-    phenotypic = load_phenotypic(phenotypic_csv)
-    files = sorted(roi_dir.rglob(pattern))
-    if not files:
-        raise FileNotFoundError(f"No se encontraron archivos {pattern} en {roi_dir}")
-
-    subjects: List[Subject] = []
-    skipped: List[str] = []
-    seen_file_ids = set()
-    seen_subject_ids = set()
-    class_counts = {0: 0, 1: 0}
-    class_limits = resolve_class_limits(max_subjects, n_per_group, all_balanced)
-
-    for path in files:
-        file_id = parse_file_id(path)
-        if file_id in seen_file_ids:
-            skipped.append(f"{path.name} (duplicado FILE_ID)")
-            continue
-
-        label_info = find_label(file_id, phenotypic)
-        if label_info is None:
-            skipped.append(path.name)
-            continue
-
-        subject_id, label, site = label_info
-        if subject_id in seen_subject_ids:
-            skipped.append(f"{path.name} (duplicado SUB_ID={subject_id})")
-            continue
-        if class_limits[label] is not None and class_counts[label] >= class_limits[label]:
-            continue
-
-        try:
-            signals_z = load_roi_1d(path, max_rois=max_rois)
-        except Exception as exc:
-            skipped.append(f"{path.name} (error lectura ROI: {exc})")
-            continue
-
-        roi_names = [f"ROI_{i + 1:03d}" for i in range(signals_z.shape[1])]
-        subjects.append(
-            Subject(
-                subject_id=subject_id,
-                file_id=file_id,
-                label=label,
-                site=site,
-                roi_signals_z=signals_z,
-                source_path=path,
-                roi_names=roi_names,
-            )
-        )
-        seen_file_ids.add(file_id)
-        seen_subject_ids.add(subject_id)
-        class_counts[label] += 1
-
-        if all(v is not None and class_counts[k] >= v for k, v in class_limits.items()):
-            break
-
-    subjects = enforce_final_balance(subjects, all_balanced)
-    if skipped:
-        print(f"[AVISO] {len(skipped)} archivos omitidos por label faltante, duplicado o error de lectura.")
-    if not subjects:
-        raise ValueError("No quedo ningun sujeto con etiqueta valida.")
-
-    labels = np.array([s.label for s in subjects])
-    print(
-        f"Sujetos cargados: {len(subjects)} | ASD={np.sum(labels == 1)} "
-        f"| Control={np.sum(labels == 0)} | ROIs={subjects[0].roi_signals_z.shape[1]}"
-    )
-    return subjects
 
 
 def parse_func_file_id(path: Path) -> str:
@@ -586,6 +513,41 @@ def load_subjects_from_nifti_atlas(
             try:
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 if metadata.get("atlas_name") == atlas_name:
+                    expected_filter_stage = (
+                        "bandpass local + zscore local"
+                        if apply_bandpass
+                        else "sin bandpass local + zscore local"
+                    )
+                    cached_filter_stage = str(metadata.get("filter_stage", ""))
+                    if cached_filter_stage != expected_filter_stage:
+                        raise ValueError(
+                            f"etapa de filtrado cacheada={cached_filter_stage!r}; "
+                            f"esperada={expected_filter_stage!r}"
+                        )
+                    if metadata.get("max_rois") != max_rois:
+                        raise ValueError(
+                            f"max_rois cacheado={metadata.get('max_rois')}; "
+                            f"solicitado={max_rois}"
+                        )
+                    cached_min_voxels = metadata.get("min_voxels")
+                    if cached_min_voxels is not None and int(cached_min_voxels) != int(min_voxels):
+                        raise ValueError(
+                            f"min_voxels cacheado={cached_min_voxels}; solicitado={min_voxels}"
+                        )
+                    if apply_bandpass:
+                        cached_lowcut = metadata.get("lowcut")
+                        cached_highcut = metadata.get("highcut")
+                        if cached_lowcut is None or cached_highcut is None:
+                            raise ValueError(
+                                "cache bandpass sin lowcut/highcut; se requiere recalculo"
+                            )
+                        if not np.isclose(float(cached_lowcut), lowcut) or not np.isclose(
+                            float(cached_highcut),
+                            highcut,
+                        ):
+                            raise ValueError(
+                                "frecuencias bandpass del cache no coinciden con la solicitud"
+                            )
                     roi_signals_z = limpiar_numericos(np.load(signal_cache_path), nombre=f"cache ROI {file_id}")
                     selected_rois = list(metadata.get("selected_rois") or [])
                     roi_names = list(metadata.get("roi_names") or [])
@@ -664,6 +626,11 @@ def load_subjects_from_nifti_atlas(
                 "atlas_data_path": str(atlas_path),
                 "filter_stage": filter_stage,
                 "max_rois": max_rois,
+                "min_voxels": min_voxels,
+                "apply_bandpass": apply_bandpass,
+                "lowcut": lowcut if apply_bandpass else None,
+                "highcut": highcut if apply_bandpass else None,
+                "roi_cache_version": 2,
             })
 
         subjects.append(
@@ -719,7 +686,7 @@ def compute_matrix(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
-    graphical_lasso_alpha: float = 0.2,
+    graphical_lasso_alpha: float = 0.5,
 ) -> np.ndarray:
     """Calcula una matriz de conectividad para un sujeto."""
     signals_z = limpiar_numericos(signals_z, nombre=f"entrada conectividad {method}")
@@ -974,7 +941,7 @@ def build_method_dataset(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
-    graphical_lasso_alpha: float = 0.2,
+    graphical_lasso_alpha: float = 0.5,
     cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Path]]:
     """Calcula/cachea matrices y devuelve X, y, matrices."""
@@ -2012,7 +1979,7 @@ def run_pipeline(
     lingam_random_state: int = 42,
     granger_lag_strategy: str = "min_q",
     pcmci_value_mode: str = "signed_logp",
-    graphical_lasso_alpha: float = 0.2,
+    graphical_lasso_alpha: float = 0.5,
     apply_bandpass: bool = True,
     cv_strategy: str = "group_site",
     cache: bool = True,
@@ -2326,7 +2293,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--lingam-random-state", type=int, default=42)
     parser.add_argument("--granger-lag-strategy", default="min_q", choices=["min_q", "min_p", "maxlag", "mean_p"])
     parser.add_argument("--pcmci-value-mode", default="signed_logp", choices=["signed_logp", "effect"])
-    parser.add_argument("--graphical-lasso-alpha", type=float, default=0.2, help="Alpha fijo para Graphical Lasso.")
+    parser.add_argument("--graphical-lasso-alpha", type=float, default=0.5, help="Alpha fijo para Graphical Lasso.")
     parser.add_argument("--skip-bandpass", action="store_true", help="No aplicar bandpass local; usar si los NIfTI estan en filt_*.")
     parser.add_argument("--cv-strategy", default="group_site", choices=["group_site", "stratified"])
     parser.add_argument("--no-cache", action="store_true", help="Recalcular matrices aunque existan")

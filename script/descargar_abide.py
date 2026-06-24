@@ -101,7 +101,7 @@ def summarize_download(data_leaf_dir: Path, phenotypic_csv: Path, derivative: st
     if derivative != "func_preproc":
         raise ValueError(
             "Este proyecto solo resume derivative='func_preproc'. "
-            "Las senales ROI deben extraerse localmente con atlas Destrieux."
+            "Las senales ROI deben extraerse localmente con el atlas configurado."
         )
     files = sorted(data_leaf_dir.glob("*_func_preproc.nii.gz"))
     if not files:
@@ -191,7 +191,7 @@ def run_download(
     """Descarga ABIDE balanceado y devuelve resumen de archivos."""
     if derivative != "func_preproc":
         raise ValueError(
-            "Este proyecto usa solo NIfTI func_preproc + atlas Destrieux. "
+            "Este proyecto usa solo NIfTI func_preproc + parcelacion local. "
             "No se permiten derivados ROI precomputados."
         )
     data_dir.mkdir(parents=True, exist_ok=True)
